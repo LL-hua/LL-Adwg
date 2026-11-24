@@ -1,0 +1,3 @@
+-keep public class * extends android.app.Activity
+-keep class com.cadapp.** { *; }
+-keep class com.google.gson.** { *; }

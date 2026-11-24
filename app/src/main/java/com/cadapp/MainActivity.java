@@ -1,0 +1,426 @@
+package com.cadapp;
+
+import android.Manifest;
+import android.app.*;
+import android.content.*;
+import android.content.pm.PackageManager;
+import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
+import android.location.*;
+import android.net.Uri;
+import android.os.*;
+import android.provider.Settings;
+import android.util.TypedValue;
+import android.view.*;
+import android.widget.*;
+import java.io.*;
+import java.util.*;
+
+public class MainActivity extends Activity {
+    private CadGLSurfaceView glView;
+    private LocationOverlayView locOverlay;
+    private LinearLayout pickCard;
+    private TextView tvPickInfo;
+    private String lastCopyCoords = "";
+    private double lastPickX = Double.NaN, lastPickY = Double.NaN;
+    private LocationManager locationManager;
+    private LocationListener locationListener;
+    private ProjConfig projConfig = new ProjConfig();
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private Runnable debounceRun;
+
+    private String curSnap = "", curSnapLayer = "";
+    private TextView btnPick;
+
+    private void updatePickCardText(double cx, double cy, String snap, String layer) {
+        if (!snap.isEmpty()) { curSnap = snap; curSnapLayer = layer; }
+        lastCopyCoords = String.format(Locale.US, "%.3f, %.3f", cy, cx);
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("🎯 %s · 图层: %s\n", curSnap, curSnapLayer));
+        sb.append(String.format(Locale.US, "N: %.3f   E: %.3f", cy, cx));
+        if (locOverlay.hasLocation()) {
+            double dx = cx - locOverlay.getCadX(), dy = cy - locOverlay.getCadY();
+            double dist = Math.hypot(dx, dy);
+            double az = Math.toDegrees(Math.atan2(dx, dy));
+            if (az < 0) az += 360.0;
+            sb.append(String.format(Locale.US, "\n📏 距当前位置: %.3f m  (方位 %.1f°)", dist, az));
+        }
+        tvPickInfo.setText(sb.toString());
+    }
+
+    private double[] gpsToCadXY(double lat, double lon) {
+        double[] xy = Projection.gps2Xy(lon, lat, projConfig.projection, projConfig.ctrlLonLat, projConfig.ctrlXy, projConfig.lonCenter);
+        if (xy == null || xy.length < 2) return null;
+        return new double[]{xy[1], xy[0]};
+    }
+
+    private GradientDrawable makeBg(int color, float radiusDp) {
+        GradientDrawable d = new GradientDrawable();
+        d.setColor(color);
+        d.setCornerRadius(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, radiusDp, getResources().getDisplayMetrics()));
+        return d;
+    }
+
+    private TextView makeToolBtn(String emoji, String text) {
+        TextView tv = new TextView(this);
+        tv.setText(emoji + "\n" + text);
+        tv.setTextColor(Color.WHITE);
+        tv.setTextSize(14f);
+        tv.setGravity(Gravity.CENTER);
+        tv.setPadding(0, 24, 0, 24);
+        tv.setLineSpacing(6f, 1f);
+        return tv;
+    }
+
+    // 【新增】动态修改状态栏和导航栏颜色，适配黑白主题
+    private void updateSystemBarColor(boolean isDark) {
+        Window window = getWindow();
+        View decor = window.getDecorView();
+        if (isDark) {
+            // 黑底：状态栏图标变白
+            window.setStatusBarColor(Color.BLACK);
+            window.setNavigationBarColor(Color.BLACK);
+            decor.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        } else {
+            // 白底：状态栏图标变黑
+            window.setStatusBarColor(Color.WHITE);
+            window.setNavigationBarColor(Color.WHITE);
+            decor.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+        }
+    }
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        
+        // 保留顶部标题栏，仅去除 ActionBar
+        requestWindowFeature(Window.FEATURE_NO_TITLE);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+            startActivity(new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:" + getPackageName())));
+        }
+
+        FrameLayout root = new FrameLayout(this);
+
+        glView = new CadGLSurfaceView(this);
+        locOverlay = new LocationOverlayView(this, glView);
+        glView.onViewportChanged = () -> locOverlay.invalidate();
+        root.addView(glView, new FrameLayout.LayoutParams(-1, -1));
+        root.addView(locOverlay, new FrameLayout.LayoutParams(-1, -1));
+
+        // 初始化系统栏颜色
+        updateSystemBarColor(glView.isDarkMode);
+
+        LinearLayout menuBtnBox = new LinearLayout(this);
+        menuBtnBox.setOrientation(LinearLayout.VERTICAL);
+        menuBtnBox.setBackground(makeBg(0xCC222222, 8f));
+        menuBtnBox.setElevation(10f);
+        
+        TextView btnMenu = makeToolBtn("⋮", "菜单");
+        btnMenu.setOnClickListener(v -> showTopMenu(v));
+        menuBtnBox.addView(btnMenu, new LinearLayout.LayoutParams(130, -2));
+
+        FrameLayout.LayoutParams menuLp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
+        // 因为保留了状态栏，TOP 边距适当缩小
+        menuLp.setMargins(0, 16, 32, 0);
+        root.addView(menuBtnBox, menuLp);
+
+        LinearLayout bottomBar = new LinearLayout(this);
+        bottomBar.setOrientation(LinearLayout.HORIZONTAL);
+        bottomBar.setBackground(makeBg(0xCC222222, 16f));
+        bottomBar.setElevation(10f);
+        bottomBar.setPadding(16, 8, 16, 8);
+
+        TextView btnOpen = makeToolBtn("📁", "打开");
+        btnOpen.setOnClickListener(v -> {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+            i.setType("*/*");
+            startActivityForResult(i, 1001);
+        });
+
+        TextView btnLayer = makeToolBtn("🗂", "图层");
+        btnLayer.setOnClickListener(v -> showLayerDialog());
+
+        btnPick = makeToolBtn("🎯", "查点");
+        btnPick.setOnClickListener(v -> {
+            glView.pickMode = !glView.pickMode;
+            btnPick.setTextColor(glView.pickMode ? 0xFF2196F3 : 0xFFFFFFFF);
+            if (!glView.pickMode) {
+                locOverlay.clearPickedPoint();
+                pickCard.setVisibility(View.GONE);
+                lastPickX = Double.NaN;
+            } else {
+                Toast.makeText(this, "查点模式已开启", Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        TextView btnLoc = makeToolBtn("🧭", "定位");
+        btnLoc.setOnClickListener(v -> {
+            checkLocationPermission();
+            LocationManager lm = (LocationManager) getSystemService(LOCATION_SERVICE);
+            if (lm != null && !lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                Toast.makeText(this, "请先开启手机定位服务", Toast.LENGTH_LONG).show();
+                startActivity(new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS));
+                return;
+            }
+            if (locOverlay.hasLocation()) glView.panToCad(locOverlay.getCadX(), locOverlay.getCadY());
+            else Toast.makeText(this, "正在等待卫星定位信号...", Toast.LENGTH_SHORT).show();
+        });
+
+        int weight = 1;
+        bottomBar.addView(btnOpen, new LinearLayout.LayoutParams(0, -2, weight));
+        bottomBar.addView(btnLayer, new LinearLayout.LayoutParams(0, -2, weight));
+        bottomBar.addView(btnPick, new LinearLayout.LayoutParams(0, -2, weight));
+        bottomBar.addView(btnLoc, new LinearLayout.LayoutParams(0, -2, weight));
+
+        FrameLayout.LayoutParams barLp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        barLp.setMargins(48, 0, 48, 48); 
+        root.addView(bottomBar, barLp);
+
+        pickCard = new LinearLayout(this);
+        pickCard.setOrientation(LinearLayout.HORIZONTAL);
+        pickCard.setBackground(makeBg(0xE6181818, 12f));
+        pickCard.setElevation(8f);
+        pickCard.setPadding(32, 24, 32, 24);
+        pickCard.setGravity(Gravity.CENTER_VERTICAL);
+        pickCard.setVisibility(View.GONE);
+        
+        tvPickInfo = new TextView(this);
+        tvPickInfo.setTextColor(0xFFFFFFFF);
+        tvPickInfo.setTextSize(14f);
+        pickCard.addView(tvPickInfo, new LinearLayout.LayoutParams(0, -2, 1f));
+        
+        Button btnCopy = new Button(this);
+        btnCopy.setText("复制");
+        btnCopy.setTextColor(Color.BLACK);
+        btnCopy.setBackgroundColor(Color.WHITE);
+        btnCopy.setOnClickListener(v -> {
+            ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (cm != null && !lastCopyCoords.isEmpty()) {
+                cm.setPrimaryClip(ClipData.newPlainText("CAD_XY", lastCopyCoords));
+                Toast.makeText(this, "已复制: " + lastCopyCoords, Toast.LENGTH_SHORT).show();
+            }
+        });
+        pickCard.addView(btnCopy, new LinearLayout.LayoutParams(-2, -2));
+        
+        FrameLayout.LayoutParams cardLp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
+        cardLp.setMargins(48, 0, 48, 200);
+        root.addView(pickCard, cardLp);
+
+        glView.onPointPicked = (cx, cy, snap, layer, fx, fy, touching) -> runOnUiThread(() -> {
+            lastPickX = cx; lastPickY = cy;
+            locOverlay.setPickedPoint(cx, cy, snap, fx, fy, touching);
+            updatePickCardText(cx, cy, snap, layer);
+            pickCard.setVisibility(View.VISIBLE);
+        });
+
+        setContentView(root);
+        checkLocationPermission();
+
+        String lastUri = getSharedPreferences("cad_cfg", MODE_PRIVATE).getString("last_dwg_uri", null);
+        if (lastUri != null && !lastUri.isEmpty()) {
+            openDwgUri(Uri.parse(lastUri), true);
+        }
+    }
+
+    private void showTopMenu(View anchor) {
+        PopupMenu popup = new PopupMenu(this, anchor);
+        popup.getMenu().add(1, 1, 1, "🖼 视图居中");
+        popup.getMenu().add(1, 2, 2, "🔠 字体微调");
+        popup.getMenu().add(1, 3, 3, "📐 图元管理");
+        popup.getMenu().add(1, 4, 4, "🌓 切换黑白背景");
+        
+        popup.setOnMenuItemClickListener(item -> {
+            if (item.getItemId() == 1) { glView.fitToScreen(); return true; }
+            if (item.getItemId() == 2) { showFontTuningDialog(); return true; }
+            if (item.getItemId() == 3) { showTypeDialog(); return true; }
+            if (item.getItemId() == 4) { 
+                glView.toggleTheme(); 
+                // 【核心】切换背景时，同步修改系统状态栏颜色
+                updateSystemBarColor(glView.isDarkMode); 
+                return true; 
+            }
+            return false;
+        });
+        popup.show();
+    }
+
+    private void checkLocationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION}, 2001);
+                return;
+            }
+        }
+        startGpsTracking();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int req, String[] perms, int[] res) {
+        if (req == 2001 && res.length > 0 && res[0] == PackageManager.PERMISSION_GRANTED)
+            startGpsTracking();
+    }
+
+    private void startGpsTracking() {
+        if (locationManager == null)
+            locationManager = (LocationManager) getSystemService(LOCATION_SERVICE);
+        if (locationManager == null || locationListener != null) return;
+        locationListener = new LocationListener() {
+            @Override
+            public void onLocationChanged(Location loc) {
+                double[] xy = gpsToCadXY(loc.getLatitude(), loc.getLongitude());
+                if (xy != null && xy.length >= 2) {
+                    float bearing = loc.hasBearing() ? loc.getBearing() : 0f;
+                    locOverlay.updateLocation(xy[0], xy[1], bearing, String.format("N: %.3f\nE: %.3f\n海拔: %.2f m", xy[1], xy[0], loc.getAltitude()));
+                    if (!Double.isNaN(lastPickX)) updatePickCardText(lastPickX, lastPickY, "", "");
+                }
+            }
+            @Override public void onStatusChanged(String p, int s, Bundle e) {}
+            @Override public void onProviderEnabled(String p) {}
+            @Override public void onProviderDisabled(String p) {}
+        };
+        try {
+            locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0f, locationListener);
+            locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 2000L, 0f, locationListener);
+        } catch (SecurityException ignored) {}
+    }
+
+    private interface SliderCb { void onVal(float v); }
+
+    private void addSlider(LinearLayout p, String name, float min, float max, float cur, SliderCb cb) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, 16, 0, 16);
+        TextView tvL = new TextView(this);
+        tvL.setText(name);
+        tvL.setWidth(220);
+        row.addView(tvL);
+        SeekBar sb = new SeekBar(this);
+        sb.setMax(200);
+        sb.setProgress((int) (((cur - min) / (max - min)) * 200));
+        row.addView(sb, new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView tvV = new TextView(this);
+        tvV.setText(String.format("%.2f", cur));
+        tvV.setWidth(110);
+        tvV.setGravity(Gravity.RIGHT);
+        row.addView(tvV);
+        sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar s, int prog, boolean fromUser) {
+                float v = min + (max - min) * (prog / 200f);
+                tvV.setText(String.format("%.2f", v));
+                if (fromUser) {
+                    if (debounceRun != null) handler.removeCallbacks(debounceRun);
+                    debounceRun = () -> cb.onVal(v);
+                    handler.postDelayed(debounceRun, 80);
+                }
+            }
+            @Override public void onStartTrackingTouch(SeekBar s) {}
+            @Override public void onStopTrackingTouch(SeekBar s) {}
+        });
+        p.addView(row);
+    }
+
+    private void showFontTuningDialog() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(48, 32, 48, 16);
+        addSlider(box, "整体字高倍率:", 0.2f, 3.0f, glView.textScaleMult, v -> glView.updateTextParams(v, glView.enScale, glView.enSpacing, glView.punctSpacing));
+        addSlider(box, "英文字高比例:", 0.5f, 3.0f, glView.enScale, v -> glView.updateTextParams(glView.textScaleMult, v, glView.enSpacing, glView.punctSpacing));
+        addSlider(box, "字符间距倍率:", 0.5f, 2.5f, glView.enSpacing, v -> glView.updateTextParams(glView.textScaleMult, glView.enScale, v, glView.punctSpacing));
+        addSlider(box, "标点压缩比例:", 0.1f, 1.5f, glView.punctSpacing, v -> glView.updateTextParams(glView.textScaleMult, glView.enScale, glView.enSpacing, v));
+        new AlertDialog.Builder(this).setTitle("SHX 字体实时微调 (自动保存)").setView(box)
+                .setNeutralButton("恢复默认", (d, w) -> glView.updateTextParams(1.0f, 1.85f, 1.13f, 0.63f)).setPositiveButton("完成", null).show();
+    }
+
+    private void showTypeDialog() {
+        List<Integer> valid = new ArrayList<>();
+        for (int i = 0; i < glView.typeNames.size(); i++)
+            if (glView.typeCounts.get(i) > 0) valid.add(i);
+        if (valid.isEmpty()) return;
+        int n = valid.size();
+        String[] labels = new String[n];
+        boolean[] checked = new boolean[n];
+        for (int i = 0; i < n; i++) {
+            int idx = valid.get(i);
+            labels[i] = glView.typeNames.get(idx) + " (" + glView.typeCounts.get(idx) + "线)";
+            checked[i] = glView.typeVisible[idx];
+        }
+        new AlertDialog.Builder(this).setTitle("图元类型开关 (0ms秒切)").setMultiChoiceItems(labels, checked, (d, w, isC) -> {
+            glView.typeVisible[valid.get(w)] = isC;
+            glView.requestRender();
+        }).setPositiveButton("完成", null).show();
+    }
+
+    private void showLayerDialog() {
+        List<Integer> valid = new ArrayList<>();
+        for (int i = 0; i < glView.layerNames.size(); i++)
+            if (glView.layerCounts.get(i) > 0) valid.add(i);
+        if (valid.isEmpty()) return;
+        int n = valid.size();
+        String[] labels = new String[n];
+        boolean[] checked = new boolean[n];
+        for (int i = 0; i < n; i++) {
+            int idx = valid.get(i);
+            labels[i] = glView.layerNames.get(idx) + " (" + glView.layerCounts.get(idx) + "线)";
+            checked[i] = glView.layerVisible[idx];
+        }
+        new AlertDialog.Builder(this).setTitle("图层管理开关 (0ms秒切)").setMultiChoiceItems(labels, checked, (d, w, isC) -> {
+            glView.layerVisible[valid.get(w)] = isC;
+            glView.requestRender();
+        }).setNeutralButton("全显", (d, w) -> {
+            Arrays.fill(glView.layerVisible, true);
+            glView.requestRender();
+        }).setNegativeButton("全隐", (d, w) -> {
+            Arrays.fill(glView.layerVisible, false);
+            glView.requestRender();
+        }).setPositiveButton("完成", null).show();
+    }
+
+    @Override protected void onResume() { super.onResume(); glView.onResume(); }
+    @Override protected void onPause() { super.onPause(); glView.onPause(); }
+    @Override protected void onDestroy() {
+        super.onDestroy();
+        if (locationManager != null && locationListener != null)
+            try { locationManager.removeUpdates(locationListener); } catch (Exception ignored) {}
+    }
+
+    private void openDwgUri(final Uri uri, final boolean isAuto) {
+        new Thread(() -> {
+            try (InputStream is = getContentResolver().openInputStream(uri); ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+                if (is == null) return;
+                byte[] buf = new byte[8192]; int len;
+                while ((len = is.read(buf)) != -1) bos.write(buf, 0, len);
+                final byte[] bytes = bos.toByteArray();
+                final ProjConfig cfg = ProjConfig.loadForDwg(MainActivity.this, uri);
+                runOnUiThread(() -> {
+                    projConfig = cfg;
+                    if (!isAuto) {
+                        if (cfg.loaded) Toast.makeText(MainActivity.this, "已加载投影: " + cfg.sourceName, Toast.LENGTH_SHORT).show();
+                        else Toast.makeText(MainActivity.this, "未找到同名.proj，使用默认UTM", Toast.LENGTH_SHORT).show();
+                    }
+                    glView.loadDwgAsync(bytes);
+                    try {
+                        Location last = locationManager != null ? locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER) : null;
+                        if (last == null && locationManager != null) last = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+                        if (last != null && locationListener != null) locationListener.onLocationChanged(last);
+                    } catch (SecurityException ignored) {}
+                });
+            } catch (Exception e) { e.printStackTrace(); }
+        }).start();
+    }
+
+    @Override
+    protected void onActivityResult(int req, int res, Intent data) {
+        if (req == 1001 && res == RESULT_OK && data != null && data.getData() != null) {
+            Uri uri = data.getData();
+            try { getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION); } catch (Exception ignored) {}
+            getSharedPreferences("cad_cfg", MODE_PRIVATE).edit().putString("last_dwg_uri", uri.toString()).apply();
+            openDwgUri(uri, false);
+        }
+    }
+}
