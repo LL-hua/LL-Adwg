@@ -29,6 +29,18 @@ public class ProjConfig {
         return "";
     }
 
+    public static ProjConfig loadFromStream(InputStream is, String name) {
+        ProjConfig cfg = new ProjConfig();
+        if (is == null) return cfg;
+        try (BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
+            StringBuilder sb = new StringBuilder(); String line;
+            while ((line = br.readLine()) != null) sb.append(line).append("\n");
+            parseText(cfg, sb.toString());
+            cfg.loaded = true; cfg.sourceName = name;
+        } catch (Exception e) { e.printStackTrace(); }
+        return cfg;
+    }
+
     public static ProjConfig loadForDwg(Context ctx, Uri dwgUri) {
         ProjConfig cfg = new ProjConfig();
         String dwgName = getDisplayName(ctx, dwgUri);

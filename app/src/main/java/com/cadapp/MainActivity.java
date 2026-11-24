@@ -133,13 +133,7 @@ public class MainActivity extends Activity {
         bottomBar.setPadding(16, 8, 16, 8);
 
         TextView btnOpen = makeToolBtn("📁", "打开");
-        btnOpen.setOnClickListener(v -> {
-            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-            i.addCategory(Intent.CATEGORY_OPENABLE);
-            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
-            i.setType("*/*");
-            startActivityForResult(i, 1001);
-        });
+        btnOpen.setOnClickListener(v -> showOpenPicker());
 
         TextView btnLayer = makeToolBtn("🗂", "图层");
         btnLayer.setOnClickListener(v -> showLayerDialog());
@@ -220,9 +214,28 @@ public class MainActivity extends Activity {
         setContentView(root);
         checkLocationPermission();
 
-        String lastUri = getSharedPreferences("cad_cfg", MODE_PRIVATE).getString("last_dwg_uri", null);
-        if (lastUri != null && !lastUri.isEmpty()) {
+        SharedPreferences sp = getSharedPreferences("cad_cfg", MODE_PRIVATE);
+        String lastAsset = sp.getString("last_asset_dwg", null);
+        String lastUri = sp.getString("last_dwg_uri", null);
+        if (lastAsset != null && !lastAsset.isEmpty()) {
+            openAssetDwg(lastAsset, true);
+        } else if (lastUri != null && !lastUri.isEmpty()) {
             openDwgUri(Uri.parse(lastUri), true);
+        } else if (!sp.getBoolean("first_run_done", false)) {
+            sp.edit().putBoolean("first_run_done", true).apply();
+            try {
+                String[] list = getAssets().list("");
+                if (list != null) {
+                    List<String> dwgs = new ArrayList<>();
+                    for (String f : list) if (f.toLowerCase().endsWith(".dwg")) dwgs.add(f);
+                    if (!dwgs.isEmpty()) {
+                        Collections.sort(dwgs);
+                        String firstDwg = dwgs.get(0);
+                        sp.edit().putString("last_asset_dwg", firstDwg).apply();
+                        openAssetDwg(firstDwg, true);
+                    }
+                }
+            } catch (Exception ignored) {}
         }
     }
 
@@ -389,6 +402,81 @@ public class MainActivity extends Activity {
             try { locationManager.removeUpdates(locationListener); } catch (Exception ignored) {}
     }
 
+    private void launchSystemPicker() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        i.setType("*/*");
+        startActivityForResult(i, 1001);
+    }
+
+    private void showOpenPicker() {
+        List<String> assetDwgs = new ArrayList<>();
+        try {
+            String[] list = getAssets().list("");
+            if (list != null) {
+                for (String f : list) {
+                    if (f.toLowerCase().endsWith(".dwg")) assetDwgs.add(f);
+                }
+            }
+        } catch (Exception ignored) {}
+        if (assetDwgs.isEmpty()) {
+            launchSystemPicker();
+            return;
+        }
+        Collections.sort(assetDwgs);
+        String[] items = new String[assetDwgs.size() + 1];
+        items[0] = "📂 浏览手机存储中的文件...";
+        for (int i = 0; i < assetDwgs.size(); i++) items[i + 1] = "📦 内置资源: " + assetDwgs.get(i);
+        new AlertDialog.Builder(this).setTitle("选择要打开的 DWG 图纸")
+            .setItems(items, (d, which) -> {
+                if (which == 0) launchSystemPicker();
+                else {
+                    String name = assetDwgs.get(which - 1);
+                    getSharedPreferences("cad_cfg", MODE_PRIVATE).edit()
+                        .putString("last_asset_dwg", name).remove("last_dwg_uri").apply();
+                    openAssetDwg(name, false);
+                }
+            }).show();
+    }
+
+    private void openAssetDwg(final String assetName, final boolean isAuto) {
+        new Thread(() -> {
+            try (InputStream is = getAssets().open(assetName); ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+                byte[] buf = new byte[8192]; int len;
+                while ((len = is.read(buf)) != -1) bos.write(buf, 0, len);
+                final byte[] bytes = bos.toByteArray();
+                String base = assetName.contains(".") ? assetName.substring(0, assetName.lastIndexOf('.')) : assetName;
+                String projName = base + ".proj";
+                ProjConfig parsed = null;
+                try (InputStream pis = getAssets().open(projName)) {
+                    parsed = ProjConfig.loadFromStream(pis, "assets/" + projName);
+                } catch (Exception ignored) {
+                    File extProj = new File("/storage/emulated/0/1hdm/" + projName);
+                    if (extProj.exists()) {
+                        try (InputStream pis = new FileInputStream(extProj)) {
+                            parsed = ProjConfig.loadFromStream(pis, extProj.getName());
+                        } catch (Exception ignored2) {}
+                    }
+                }
+                final ProjConfig cfg = (parsed != null) ? parsed : new ProjConfig();
+                runOnUiThread(() -> {
+                    projConfig = cfg;
+                    if (!isAuto) {
+                        if (cfg.loaded) Toast.makeText(MainActivity.this, "已加载内置投影: " + cfg.sourceName, Toast.LENGTH_SHORT).show();
+                        else Toast.makeText(MainActivity.this, "内置图纸未配同名.proj，使用默认UTM", Toast.LENGTH_SHORT).show();
+                    }
+                    glView.loadDwgAsync(bytes);
+                    try {
+                        Location last = locationManager != null ? locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER) : null;
+                        if (last == null && locationManager != null) last = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+                        if (last != null && locationListener != null) locationListener.onLocationChanged(last);
+                    } catch (SecurityException ignored) {}
+                });
+            } catch (Exception e) { e.printStackTrace(); }
+        }).start();
+    }
+
     private void openDwgUri(final Uri uri, final boolean isAuto) {
         new Thread(() -> {
             try (InputStream is = getContentResolver().openInputStream(uri); ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
@@ -419,7 +507,7 @@ public class MainActivity extends Activity {
         if (req == 1001 && res == RESULT_OK && data != null && data.getData() != null) {
             Uri uri = data.getData();
             try { getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION); } catch (Exception ignored) {}
-            getSharedPreferences("cad_cfg", MODE_PRIVATE).edit().putString("last_dwg_uri", uri.toString()).apply();
+            getSharedPreferences("cad_cfg", MODE_PRIVATE).edit().putString("last_dwg_uri", uri.toString()).remove("last_asset_dwg").apply();
             openDwgUri(uri, false);
         }
     }
