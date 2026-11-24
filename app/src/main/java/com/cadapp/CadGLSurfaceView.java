@@ -37,6 +37,8 @@ public class CadGLSurfaceView extends GLSurfaceView implements GLSurfaceView.Ren
     private final GestureDetector gestureDetector;
     private long twoFingerDownTime = 0; private float twoFingerX = 0, twoFingerY = 0; private boolean twoFingerMoved = false; private boolean dragging;
     private HzShxFontTool shxParser;
+    private final android.os.Handler longPressHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private Runnable longPressRunnable;
 
     public CadGLSurfaceView(Context c) {
         super(c); setEGLContextClientVersion(2); setPreserveEGLContextOnPause(true); setRenderer(this); setRenderMode(RENDERMODE_WHEN_DIRTY);
@@ -171,6 +173,7 @@ public class CadGLSurfaceView extends GLSurfaceView implements GLSurfaceView.Ren
                     fb.put(p, x1); fb.put(p+1, y1); fb.put(p+2, r); fb.put(p+3, g); fb.put(p+4, b); fb.put(p+5, 1f);
                     fb.put(p+6, x2); fb.put(p+7, y2); fb.put(p+8, r); fb.put(p+9, g); fb.put(p+10, b); fb.put(p+11, 1f);
                 }
+                try { StringBuilder sb = new StringBuilder("strokes=" + strokeCount + " labels=" + labelCount + " totalVerts=" + totalVerts + "\n"); for (int i=0;i<typeNum;i++) sb.append(tNames.get(i)+"="+tCnt[i]+"\n"); for (int i=0;i<layerNum;i++) if(lCnt[i]>0) sb.append(lNames.get(i)+"="+lCnt[i]+"\n"); java.nio.file.Files.write(java.nio.file.Paths.get("/storage/emulated/0/1hdm/stat_javadwg.txt"), sb.toString().getBytes()); } catch (Exception ignored) {}
                 fb.position(0); pendingBuffer = fb; pendingVertexCount = totalVerts; pendingBatches = newBatches;
                 long dt = System.currentTimeMillis() - t0;
                 post(() -> {
@@ -209,6 +212,49 @@ public class CadGLSurfaceView extends GLSurfaceView implements GLSurfaceView.Ren
         double rx = (sx - getWidth() / 2f - userTx) / s;
         double ry = (getHeight() / 2f + userTy - sy) / s;
         return new double[]{gcx + rx, gcy + ry};
+    }
+
+    public void pickAndHideLayerAt(float sx, float sy) {
+        if (activeBuffer == null || vertexCount == 0 || getWidth() <= 0 || getHeight() <= 0) return;
+        double s = baseScale * userScale;
+        float hw = getWidth() / 2f, hh = getHeight() / 2f;
+        double bestDistSq = 36.0 * 36.0;
+        int bestLayerId = -1;
+
+        for (DrawBatch b : batches) {
+            if (b.vertCount <= 0 || b.typeId >= typeVisible.length || b.layerId >= layerVisible.length) continue;
+            if (!typeVisible[b.typeId] || !layerVisible[b.layerId]) continue;
+            int endV = b.startVert + b.vertCount;
+            for (int v = b.startVert; v + 1 < endV; v += 2) {
+                int p1 = v * 6, p2 = (v + 1) * 6;
+                float x1 = (float)(hw + userTx + activeBuffer.get(p1) * s);
+                float y1 = (float)(hh + userTy - activeBuffer.get(p1 + 1) * s);
+                float x2 = (float)(hw + userTx + activeBuffer.get(p2) * s);
+                float y2 = (float)(hh + userTy - activeBuffer.get(p2 + 1) * s);
+
+                float dx = x2 - x1, dy = y2 - y1;
+                float lenSq = dx * dx + dy * dy;
+                float t = (lenSq > 1e-6f) ? Math.max(0f, Math.min(1f, ((sx - x1) * dx + (sy - y1) * dy) / lenSq)) : 0f;
+                float px = x1 + t * dx, py = y1 + t * dy;
+                float distSq = (sx - px) * (sx - px) + (sy - py) * (sy - py);
+                if (distSq < bestDistSq) { bestDistSq = distSq; bestLayerId = b.layerId; }
+            }
+        }
+        if (bestLayerId >= 0 && bestLayerId < layerNames.size()) {
+            final int lid = bestLayerId;
+            final String lName = layerNames.get(lid);
+            int cnt = lid < layerCounts.size() ? layerCounts.get(lid) : 0;
+            new android.app.AlertDialog.Builder(getContext())
+                .setTitle("选中图层: " + lName)
+                .setMessage("该图层共有 " + cnt + " 条图元，是否隐藏？")
+                .setPositiveButton("隐藏该图层", (d, w) -> {
+                    layerVisible[lid] = false;
+                    requestRender();
+                    Toast.makeText(getContext(), "已隐藏图层: " + lName + " (可在底部图层面板恢复)", Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("取消", null)
+                .show();
+        }
     }
 
     public void pickAtScreen(float sx, float sy, float fingerX, float fingerY, boolean touching) {
@@ -307,9 +353,16 @@ public class CadGLSurfaceView extends GLSurfaceView implements GLSurfaceView.Ren
         switch (e.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
                 twoFingerDownTime = 0;
+                if (longPressRunnable != null) longPressHandler.removeCallbacks(longPressRunnable);
+                if (!pickMode && pc == 1) {
+                    final float dx0 = fx, dy0 = fy;
+                    longPressRunnable = () -> pickAndHideLayerAt(dx0, dy0);
+                    longPressHandler.postDelayed(longPressRunnable, 450);
+                }
                 if (pickMode && pc == 1) { pickAtScreen(fx, fy - 240f, fx, fy, true); return true; }
                 lastX = fx; lastY = fy; dragging = vp > 0; break;
             case MotionEvent.ACTION_POINTER_DOWN:
+                if (longPressRunnable != null) longPressHandler.removeCallbacks(longPressRunnable);
                 if (pc == 2) {
                     twoFingerDownTime = System.currentTimeMillis();
                     twoFingerX = (e.getX(0) + e.getX(1)) * 0.5f;
@@ -329,8 +382,10 @@ public class CadGLSurfaceView extends GLSurfaceView implements GLSurfaceView.Ren
                     if (Math.hypot(cx - twoFingerX, cy - twoFingerY) > 30f) twoFingerMoved = true;
                 }
                 if (pickMode && pc == 1 && !scaleDetector.isInProgress()) { pickAtScreen(fx, fy - 240f, fx, fy, true); return true; }
+                if (Math.hypot(fx - lastX, fy - lastY) > 15f && longPressRunnable != null) longPressHandler.removeCallbacks(longPressRunnable);
                 if (dragging && !scaleDetector.isInProgress()) { userTx += fx - lastX; userTy += fy - lastY; requestRender(); if (onViewportChanged != null) post(onViewportChanged); } lastX = fx; lastY = fy; break;
             case MotionEvent.ACTION_UP: case MotionEvent.ACTION_CANCEL:
+                if (longPressRunnable != null) longPressHandler.removeCallbacks(longPressRunnable);
                 if (pickMode && pc == 1) { pickAtScreen(fx, fy - 240f, fx, fy, false); }
                 dragging = false; twoFingerDownTime = 0; break;
         }

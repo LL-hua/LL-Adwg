@@ -192,9 +192,8 @@ public class DwgParser {
                         } else if (st == 2 && seg[3] > 0) {
                             double cx = seg[1], cy = seg[2], r = seg[3], a0 = seg[4], a1 = seg[5];
                             boolean ccw = seg[6] != 0;
-                            double span = ccw ? ((a1 - a0) % (2 * Math.PI)) : ((a0 - a1) % (2 * Math.PI));
-                            if (span <= 0) span += 2 * Math.PI;
-                            if (!ccw) span = -span;
+                            double d = (a1 - a0) % (2 * Math.PI); if (d < 0) d += 2 * Math.PI;
+                            double span = ccw ? d : (d == 0 ? -2 * Math.PI : d - 2 * Math.PI);
                             int segs = Math.max(12, Math.min(360, (int)(Math.abs(span) / (Math.PI / 60.0)) + 1));
                             double px = xf.applyX(cx + r * Math.cos(a0), cy + r * Math.sin(a0)), py = xf.applyY(cx + r * Math.cos(a0), cy + r * Math.sin(a0));
                             for (int i = 1; i <= segs; i++) {
@@ -205,9 +204,8 @@ public class DwgParser {
                             double cx = seg[1], cy = seg[2], mx = seg[3], my = seg[4], rat = seg[5], a0 = seg[6], a1 = seg[7];
                             boolean ccw = seg[8] != 0;
                             double rx = Math.hypot(mx, my), ry = rx * rat, ang = Math.atan2(my, mx);
-                            double span = ccw ? ((a1 - a0) % (2 * Math.PI)) : ((a0 - a1) % (2 * Math.PI));
-                            if (span <= 0) span += 2 * Math.PI;
-                            if (!ccw) span = -span;
+                            double d = (a1 - a0) % (2 * Math.PI); if (d < 0) d += 2 * Math.PI;
+                            double span = ccw ? d : (d == 0 ? -2 * Math.PI : d - 2 * Math.PI);
                             int segs = 64; double px = 0, py = 0;
                             for (int i = 0; i <= segs; i++) {
                                 double t = a0 + span * i / segs, lx = rx * Math.cos(t), ly = ry * Math.sin(t);
@@ -265,7 +263,7 @@ public class DwgParser {
                         else if (tc == 0x2C) ent = EntityDecoder.decodeMText(r, endBit);
                         else if (tc == 0x1F) ent = EntityDecoder.decodeSolid(r);
                         else if (tc == 0x1B) ent = EntityDecoder.decodePoint(r);
-                        else if (tc == 0x4E) ent = EntityDecoder.decodeHatch(r);
+                        
                         else if (tc == 0x07 || tc == 0x08 || isDim) {
                             BitReader r2 = rec.bodyBitStream(); r2.setBitPos(saveH);
                             r2.readH();
