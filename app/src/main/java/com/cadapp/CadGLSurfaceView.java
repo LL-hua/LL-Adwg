@@ -307,7 +307,7 @@ public class CadGLSurfaceView extends GLSurfaceView implements GLSurfaceView.Ren
 
     public void fitToScreen() {
         float w = maxX - minX, h = maxY - minY; if (w <= 0 || h <= 0 || getWidth() == 0) return;
-        baseScale = Math.min(getWidth() / w, getHeight() / h) * 0.9f; hasFitted = true; userScale = 1f; userTx = 0f; userTy = 0f; requestRender(); if (onViewportChanged != null) post(onViewportChanged);
+        baseScale = Math.min(getWidth() / w, getHeight() / h) * 0.9f; hasFitted = true; userScale = 1f; userTx = -(minX + maxX) * 0.5f * baseScale; userTy = (minY + maxY) * 0.5f * baseScale; requestRender(); if (onViewportChanged != null) post(onViewportChanged);
     }
 
     @Override public void onSurfaceCreated(GL10 gl, EGLConfig c) {

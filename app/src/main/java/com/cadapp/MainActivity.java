@@ -120,13 +120,16 @@ public class MainActivity extends Activity {
         menuBtnBox.setBackground(makeBg(0xCC222222, 8f));
         menuBtnBox.setElevation(10f);
         
-        TextView btnMenu = makeToolBtn("⋮", "菜单");
+        TextView btnMenu = new TextView(this);
+        btnMenu.setText("☰");
+        btnMenu.setTextColor(0xFFFFFFFF);
+        btnMenu.setTextSize(22f);
+        btnMenu.setGravity(android.view.Gravity.CENTER);
         btnMenu.setOnClickListener(v -> showTopMenu(v));
-        menuBtnBox.addView(btnMenu, new LinearLayout.LayoutParams(130, -2));
+        menuBtnBox.addView(btnMenu, new LinearLayout.LayoutParams(110, 110));
 
-        FrameLayout.LayoutParams menuLp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
-        // 因为保留了状态栏，TOP 边距适当缩小
-        menuLp.setMargins(0, 16, 32, 0);
+        FrameLayout.LayoutParams menuLp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.END);
+        menuLp.setMargins(0, 0, 48, 240);
         root.addView(menuBtnBox, menuLp);
 
         LinearLayout bottomBar = new LinearLayout(this);
@@ -231,6 +234,15 @@ public class MainActivity extends Activity {
         FrameLayout.LayoutParams cardLp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
         cardLp.setMargins(48, 0, 48, 200);
         root.addView(pickCard, cardLp);
+
+        bottomBar.post(() -> {
+            int gap2mm = Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_MM, 2.0f, getResources().getDisplayMetrics()));
+            int topOfBar = 48 + bottomBar.getHeight() + gap2mm;
+            menuLp.setMargins(0, 0, 48, topOfBar);
+            menuBtnBox.setLayoutParams(menuLp);
+            cardLp.setMargins(48, 0, 48, topOfBar);
+            pickCard.setLayoutParams(cardLp);
+        });
 
         glView.onPointPicked = (cx, cy, snap, layer, fx, fy, touching) -> runOnUiThread(() -> {
             locOverlay.setPickedPoint(cx, cy, snap, fx, fy, touching);
