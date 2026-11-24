@@ -30,7 +30,10 @@ public class MainActivity extends Activity {
     private Runnable debounceRun;
 
     private String curSnap = "", curSnapLayer = "";
-    private TextView btnPick;
+    private TextView btnPick, btnDist;
+    private Button btnCardAction;
+    private boolean distMode = false;
+    private double measStartX = Double.NaN, measStartY = Double.NaN;
 
     private void updatePickCardText(double cx, double cy, String snap, String layer) {
         if (!snap.isEmpty()) { curSnap = snap; curSnapLayer = layer; }
@@ -140,6 +143,7 @@ public class MainActivity extends Activity {
 
         btnPick = makeToolBtn("🎯", "查点");
         btnPick.setOnClickListener(v -> {
+            if (distMode) { distMode = false; btnDist.setTextColor(0xFFFFFFFF); locOverlay.clearMeasure(); measStartX = Double.NaN; }
             glView.pickMode = !glView.pickMode;
             btnPick.setTextColor(glView.pickMode ? 0xFF2196F3 : 0xFFFFFFFF);
             if (!glView.pickMode) {
@@ -147,7 +151,23 @@ public class MainActivity extends Activity {
                 pickCard.setVisibility(View.GONE);
                 lastPickX = Double.NaN;
             } else {
+                btnCardAction.setText("复制");
                 Toast.makeText(this, "查点模式已开启", Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        btnDist = makeToolBtn("📏", "测距");
+        btnDist.setOnClickListener(v -> {
+            if (glView.pickMode && !distMode) { glView.pickMode = false; btnPick.setTextColor(0xFFFFFFFF); }
+            distMode = !distMode;
+            glView.pickMode = distMode;
+            btnDist.setTextColor(distMode ? 0xFF2196F3 : 0xFFFFFFFF);
+            locOverlay.clearMeasure();
+            measStartX = Double.NaN;
+            pickCard.setVisibility(View.GONE);
+            if (distMode) {
+                btnCardAction.setText("重测");
+                Toast.makeText(this, "测距已开启：拖动选取第 1 点", Toast.LENGTH_SHORT).show();
             }
         });
 
@@ -168,6 +188,7 @@ public class MainActivity extends Activity {
         bottomBar.addView(btnOpen, new LinearLayout.LayoutParams(0, -2, weight));
         bottomBar.addView(btnLayer, new LinearLayout.LayoutParams(0, -2, weight));
         bottomBar.addView(btnPick, new LinearLayout.LayoutParams(0, -2, weight));
+        bottomBar.addView(btnDist, new LinearLayout.LayoutParams(0, -2, weight));
         bottomBar.addView(btnLoc, new LinearLayout.LayoutParams(0, -2, weight));
 
         FrameLayout.LayoutParams barLp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
@@ -187,26 +208,52 @@ public class MainActivity extends Activity {
         tvPickInfo.setTextSize(14f);
         pickCard.addView(tvPickInfo, new LinearLayout.LayoutParams(0, -2, 1f));
         
-        Button btnCopy = new Button(this);
-        btnCopy.setText("复制");
-        btnCopy.setTextColor(Color.BLACK);
-        btnCopy.setBackgroundColor(Color.WHITE);
-        btnCopy.setOnClickListener(v -> {
+        btnCardAction = new Button(this);
+        btnCardAction.setText("复制");
+        btnCardAction.setTextColor(Color.BLACK);
+        btnCardAction.setBackgroundColor(Color.WHITE);
+        btnCardAction.setOnClickListener(v -> {
+            if (distMode) {
+                measStartX = Double.NaN;
+                locOverlay.clearMeasure();
+                pickCard.setVisibility(View.GONE);
+                Toast.makeText(this, "已清零，请重新选取第 1 点", Toast.LENGTH_SHORT).show();
+                return;
+            }
             ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
             if (cm != null && !lastCopyCoords.isEmpty()) {
                 cm.setPrimaryClip(ClipData.newPlainText("CAD_XY", lastCopyCoords));
                 Toast.makeText(this, "已复制: " + lastCopyCoords, Toast.LENGTH_SHORT).show();
             }
         });
-        pickCard.addView(btnCopy, new LinearLayout.LayoutParams(-2, -2));
+        pickCard.addView(btnCardAction, new LinearLayout.LayoutParams(-2, -2));
         
         FrameLayout.LayoutParams cardLp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
         cardLp.setMargins(48, 0, 48, 200);
         root.addView(pickCard, cardLp);
 
         glView.onPointPicked = (cx, cy, snap, layer, fx, fy, touching) -> runOnUiThread(() -> {
-            lastPickX = cx; lastPickY = cy;
             locOverlay.setPickedPoint(cx, cy, snap, fx, fy, touching);
+            if (distMode) {
+                if (Double.isNaN(measStartX)) {
+                    tvPickInfo.setText(String.format(Locale.US, "📍 起点(A) · %s\nN: %.3f   E: %.3f\n松开手指锁定第 1 点", snap, cy, cx));
+                    pickCard.setVisibility(View.VISIBLE);
+                    if (!touching) {
+                        measStartX = cx; measStartY = cy;
+                        locOverlay.setMeasureStart(cx, cy);
+                        Toast.makeText(this, "已锁定起点，请拖动选取第 2 点", Toast.LENGTH_SHORT).show();
+                    }
+                } else {
+                    double dE = cx - measStartX, dN = cy - measStartY;
+                    double dist = Math.hypot(dE, dN);
+                    double az = Math.toDegrees(Math.atan2(dE, dN));
+                    if (az < 0) az += 360.0;
+                    tvPickInfo.setText(String.format(Locale.US, "📏 平距: %.3f m  (方位 %.1f°)\nΔN: %.3f m   ΔE: %.3f m\n终点(%s): N %.3f, E %.3f", dist, az, dN, dE, snap, cy, cx));
+                    pickCard.setVisibility(View.VISIBLE);
+                }
+                return;
+            }
+            lastPickX = cx; lastPickY = cy;
             updatePickCardText(cx, cy, snap, layer);
             pickCard.setVisibility(View.VISIBLE);
         });

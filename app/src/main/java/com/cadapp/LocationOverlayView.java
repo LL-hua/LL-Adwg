@@ -13,6 +13,8 @@ public class LocationOverlayView extends View {
     private String infoText = "";
 
     private boolean hasPicked = false;
+    private boolean hasMeasureA = false;
+    private double measAX = 0, measAY = 0;
     private double pickCadX = 0, pickCadY = 0;
     private String pickSnapType = "";
     private float fingerX = 0, fingerY = 0; private boolean isPickingTouch = false;
@@ -54,6 +56,8 @@ public class LocationOverlayView extends View {
     }
 
     public void clearPickedPoint() { this.hasPicked = false; postInvalidate(); }
+    public void setMeasureStart(double x, double y) { this.measAX = x; this.measAY = y; this.hasMeasureA = true; postInvalidate(); }
+    public void clearMeasure() { this.hasMeasureA = false; this.hasPicked = false; postInvalidate(); }
     public boolean hasLocation() { return hasLocation; }
     public double getCadX() { return curCadX; }
     public double getCadY() { return curCadY; }
@@ -64,6 +68,17 @@ public class LocationOverlayView extends View {
         super.onDraw(canvas);
         if (cadView == null) return;
 
+        if (hasMeasureA) {
+            float[] ap = cadView.cadToScreen(measAX, measAY);
+            snapPaint.setColor(0xFFFFEB3B);
+            canvas.drawCircle(ap[0], ap[1], 16f, snapPaint);
+            if (hasPicked) {
+                float[] bp = cadView.cadToScreen(pickCadX, pickCadY);
+                guidePaint.setColor(0xFF00E5FF);
+                canvas.drawLine(ap[0], ap[1], bp[0], bp[1], guidePaint);
+                guidePaint.setColor(0xCCFF9800);
+            }
+        }
         if (hasPicked) {
             float[] pp = cadView.cadToScreen(pickCadX, pickCadY);
             float px = pp[0], py = pp[1];
