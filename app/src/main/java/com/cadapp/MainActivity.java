@@ -19,6 +19,7 @@ import java.util.*;
 public class MainActivity extends Activity {
     private CadGLSurfaceView glView;
     private LocationOverlayView locOverlay;
+    private ScriptOverlayView scriptOverlay;
     private LinearLayout pickCard;
     private TextView tvPickInfo;
     private String lastCopyCoords = "";
@@ -108,9 +109,11 @@ public class MainActivity extends Activity {
 
         glView = new CadGLSurfaceView(this);
         locOverlay = new LocationOverlayView(this, glView);
-        glView.onViewportChanged = () -> locOverlay.invalidate();
+        scriptOverlay = new ScriptOverlayView(this, glView);
+        glView.onViewportChanged = () -> { locOverlay.invalidate(); scriptOverlay.invalidate(); };
         root.addView(glView, new FrameLayout.LayoutParams(-1, -1));
         root.addView(locOverlay, new FrameLayout.LayoutParams(-1, -1));
+        root.addView(scriptOverlay, new FrameLayout.LayoutParams(-1, -1));
 
         // 初始化系统栏颜色
         updateSystemBarColor(glView.isDarkMode);
@@ -298,17 +301,48 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void showScriptDialog() {
+        CadScriptEngine.ensureSampleScripts();
+        File[] files = new File("/storage/emulated/0/1hdm/scripts").listFiles();
+        List<File> list = new ArrayList<>(); List<String> names = new ArrayList<>();
+        if (files != null) for (File f : files) if (f.isFile()) { list.add(f); names.add("▶ " + f.getName()); }
+        AlertDialog.Builder b = new AlertDialog.Builder(this).setTitle("脚本扩展 (/sdcard/1hdm/scripts/)")
+            .setItems(names.toArray(new String[0]), (d, w) -> runScriptFile(list.get(w)))
+            .setNeutralButton("语法说明", (d, w) -> new AlertDialog.Builder(this).setTitle("二次开发脚本指令")
+                .setMessage("脚本目录: /sdcard/1hdm/scripts/*.txt (或 .js)\n\n1. 变量与数组:\n• let x = 10 / var arr = [1, 2] / arr[0] = 5\n• arr.push(3) / arr.length (数组长度)\n\n2. 循环语句:\n• for (let i = 0; i < 5; i++) { ... }\n• 兼容 LOOP k FROM 0 TO 100 STEP 20 ... ENDLOOP\n\n3. 内置坐标与函数:\n• VIEW_X, VIEW_Y (屏幕中心E/N), GPS_X, GPS_Y, PI\n• sin, cos, tan (角度制), sqrt, abs, hypot\n\n4. 测量与绘图指令:\n• DIST x1, y1, x2, y2 (存入 OUT_DIST, OUT_AZ)\n• COLOR #RRGGBB / CLEAR_DRAW\n• DRAW_LINE / DRAW_CIRCLE / DRAW_POINT / DRAW_TEXT\n\n5. 弹窗与报表导出:\n• PRINT \"文本\" + 变量\n• EXPORT_HEADER / EXPORT_ROW / SAVE_CSV \"表.csv\"").setPositiveButton("知道了", null).show())
+            .setPositiveButton("关闭", null);
+        if (scriptOverlay != null && scriptOverlay.hasShapes()) b.setNegativeButton("清除脚本图形", (d, w) -> scriptOverlay.clearShapes());
+        b.show();
+    }
+    private void runScriptFile(File f) {
+        new Thread(() -> {
+            try (FileInputStream fis = new FileInputStream(f); ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+                byte[] buf = new byte[4096]; int n; while ((n = fis.read(buf)) != -1) bos.write(buf, 0, n);
+                CadScriptEngine.RunResult res = CadScriptEngine.execute(bos.toString("UTF-8"), new CadScriptEngine.HostBridge() {
+                    @Override public double[] getViewCenterCad() { return glView.screenToCad(glView.getWidth() / 2f, glView.getHeight() / 2f); }
+                    @Override public double[] getGpsCad() { return locOverlay.hasLocation() ? new double[]{locOverlay.getCadX(), locOverlay.getCadY()} : null; }
+                    @Override public double[] gpsToCad(double lat, double lon) { return gpsToCadXY(lat, lon); }
+                    @Override public double[] cadToGps(double cx, double cy) { return null; }
+                    @Override public void onDrawShapes(List<ScriptOverlayView.Shape> shapes) { runOnUiThread(() -> scriptOverlay.setShapes(shapes)); }
+                    @Override public void onClearShapes() { runOnUiThread(() -> scriptOverlay.clearShapes()); }
+                });
+                runOnUiThread(() -> new AlertDialog.Builder(this).setTitle("执行结果: " + f.getName()).setMessage(res.log + (res.shapeCount > 0 ? "\n已绘制 " + res.shapeCount + " 个图元" : "")).setPositiveButton("确定", null).show());
+            } catch (Exception e) { runOnUiThread(() -> Toast.makeText(this, "失败: " + e.getMessage(), Toast.LENGTH_LONG).show()); }
+        }).start();
+    }
     private void showTopMenu(View anchor) {
         PopupMenu popup = new PopupMenu(this, anchor);
         popup.getMenu().add(1, 1, 1, "🖼 视图居中");
         popup.getMenu().add(1, 2, 2, "🔠 字体微调");
         popup.getMenu().add(1, 3, 3, "📐 图元管理");
         popup.getMenu().add(1, 4, 4, "🌓 切换黑白背景");
+        popup.getMenu().add(1, 5, 5, "📜 脚本扩展");
         
         popup.setOnMenuItemClickListener(item -> {
             if (item.getItemId() == 1) { glView.fitToScreen(); return true; }
             if (item.getItemId() == 2) { showFontTuningDialog(); return true; }
             if (item.getItemId() == 3) { showTypeDialog(); return true; }
+            if (item.getItemId() == 5) { showScriptDialog(); return true; }
             if (item.getItemId() == 4) { 
                 glView.toggleTheme(); 
                 // 【核心】切换背景时，同步修改系统状态栏颜色

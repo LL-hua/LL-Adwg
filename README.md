@@ -41,3 +41,29 @@ center=33
 * **点捕捉查坐标**：点击底部「查点」开启捕捉模式，按住屏幕拖动，手指上方 **240px 黄色指示箭头**会自动吸附端点（`□`）与中点（`△`），底部显示 `N(北) / E(东)` 坐标及距当前 GPS 的平距与方位角，支持一键复制。
 * **实地定位**：点击底部「定位」开启 GPS，图纸上实时显示当前位置与行进方向。
 * **图层与显示**：点击底部「图层」或右上角「菜单」，可控制图层/图元显隐、切换黑白底色或微调字高。
+
+
+## 4. 二次开发脚本扩展 (`/sdcard/1hdm/scripts/`)
+
+App 内置零依赖 JS 风格脚本引擎，无需重新编译，只需在 `/sdcard/1hdm/scripts/` 目录下新建 `.txt` 或 `.js` 文件即可扩展测量计算、批量导出与图形绘制功能（首次打开菜单「📜 脚本扩展」会自动生成 `00_脚本开发手册与全示例.txt`）。
+
+### 支持语法与函数
+- **变量与数组**：`let x = 10`、`var arr = [10, 20]`、`arr.push(30)`、`arr[0]`、`arr.length`
+- **循环控制**：`for (let i = 0; i < 5; i++) { ... }` 或 `LOOP k FROM 0 TO 100 STEP 20 ... ENDLOOP`
+- **内置坐标与数学函数**：`VIEW_X`, `VIEW_Y`, `GPS_X`, `GPS_Y`, `PI`, `sin(度)`, `cos(度)`, `tan(度)`, `sqrt(x)`, `abs(x)`, `hypot(dx, dy)`
+
+### 核心指令列表
+
+| 指令 | 格式 | 说明 |
+| :--- | :--- | :--- |
+| `DIST` | `DIST x1, y1, x2, y2` | 计算平距与方位角（北方向顺时针），结果写入 `OUT_DIST` 和 `OUT_AZ` |
+| `COLOR` | `COLOR RRGGBB` | 设置后续绘图颜色（16进制 RGB，如 `FF3B30`、`00E5FF`） |
+| `DRAW_LINE` | `DRAW_LINE x1, y1, x2, y2` | 绘制直线段 |
+| `DRAW_CIRCLE` | `DRAW_CIRCLE cx, cy, r` | 绘制圆 |
+| `DRAW_POINT` | `DRAW_POINT x, y, "标注"` | 绘制双环控制点与文字标签 |
+| `DRAW_TEXT` | `DRAW_TEXT x, y, "文字"` | 绘制纯文字标注 |
+| `CLEAR_DRAW` | `CLEAR_DRAW` | 清空脚本绘制的所有图形 |
+| `PRINT` | `PRINT "结果:" + val` | 输出内容到执行结果弹窗 |
+| `EXPORT_HEADER` | `EXPORT_HEADER "列名1,列名2"` | 设置 CSV 表头 |
+| `EXPORT_ROW` | `EXPORT_ROW v1, v2` | 追加 CSV 数据行 |
+| `SAVE_CSV` | `SAVE_CSV "文件名.csv"` | 保存表格至 `/sdcard/1hdm/output/` |
