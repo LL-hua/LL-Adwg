@@ -31,6 +31,7 @@ public class MainActivity extends Activity {
     private Runnable debounceRun;
 
     private String curSnap = "", curSnapLayer = "";
+    private double lastSoundX = Double.NaN, lastSoundY = Double.NaN;
     private TextView btnPick, btnDist;
     private Button btnCardAction;
     private boolean distMode = false;
@@ -228,7 +229,7 @@ public class MainActivity extends Activity {
             }
             ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
             if (cm != null && !lastCopyCoords.isEmpty()) {
-                cm.setPrimaryClip(ClipData.newPlainText("CAD_XY", lastCopyCoords));
+                cm.setPrimaryClip(ClipData.newPlainText("CAD_XY", lastCopyCoords)); CadSound.success();
                 Toast.makeText(this, "已复制: " + lastCopyCoords, Toast.LENGTH_SHORT).show();
             }
         });
@@ -249,12 +250,13 @@ public class MainActivity extends Activity {
 
         glView.onPointPicked = (cx, cy, snap, layer, fx, fy, touching) -> runOnUiThread(() -> {
             locOverlay.setPickedPoint(cx, cy, snap, fx, fy, touching);
+            if ((cx != lastSoundX || cy != lastSoundY) && ("端点".equals(snap) || "中点".equals(snap))) { lastSoundX = cx; lastSoundY = cy; if ("端点".equals(snap)) CadSound.snapEnd(); else CadSound.snapMid(); }
             if (distMode) {
                 if (Double.isNaN(measStartX)) {
                     tvPickInfo.setText(String.format(Locale.US, "📍 起点(A) · %s\nN: %.3f   E: %.3f\n松开手指锁定第 1 点", snap, cy, cx));
                     pickCard.setVisibility(View.VISIBLE);
                     if (!touching) {
-                        measStartX = cx; measStartY = cy;
+                        measStartX = cx; measStartY = cy; CadSound.confirm();
                         locOverlay.setMeasureStart(cx, cy);
                         Toast.makeText(this, "已锁定起点，请拖动选取第 2 点", Toast.LENGTH_SHORT).show();
                     }
@@ -277,9 +279,16 @@ public class MainActivity extends Activity {
         checkLocationPermission();
 
         SharedPreferences sp = getSharedPreferences("cad_cfg", MODE_PRIVATE);
+        CadSound.sfxEnabled = sp.getBoolean("cad_sfx_on", true);
+        if (sp.getBoolean("cad_bgm_on", false)) CadSound.startBgm();
         String lastAsset = sp.getString("last_asset_dwg", null);
         String lastUri = sp.getString("last_dwg_uri", null);
-        if (lastAsset != null && !lastAsset.isEmpty()) {
+        Uri extUri = getIntent() != null ? getIntent().getData() : null;
+        if (extUri != null) {
+            try { getContentResolver().takePersistableUriPermission(extUri, Intent.FLAG_GRANT_READ_URI_PERMISSION); } catch (Exception ignored) {}
+            sp.edit().putString("last_dwg_uri", extUri.toString()).remove("last_asset_dwg").apply();
+            openDwgUri(extUri, false);
+        } else if (lastAsset != null && !lastAsset.isEmpty()) {
             openAssetDwg(lastAsset, true);
         } else if (lastUri != null && !lastUri.isEmpty()) {
             openDwgUri(Uri.parse(lastUri), true);
@@ -326,6 +335,7 @@ public class MainActivity extends Activity {
                     @Override public void onDrawShapes(List<ScriptOverlayView.Shape> shapes) { runOnUiThread(() -> scriptOverlay.setShapes(shapes)); }
                     @Override public void onClearShapes() { runOnUiThread(() -> scriptOverlay.clearShapes()); }
                 });
+                CadSound.success();
                 runOnUiThread(() -> new AlertDialog.Builder(this).setTitle("执行结果: " + f.getName()).setMessage(res.log + (res.shapeCount > 0 ? "\n已绘制 " + res.shapeCount + " 个图元" : "")).setPositiveButton("确定", null).show());
             } catch (Exception e) { runOnUiThread(() -> Toast.makeText(this, "失败: " + e.getMessage(), Toast.LENGTH_LONG).show()); }
         }).start();
@@ -337,12 +347,16 @@ public class MainActivity extends Activity {
         popup.getMenu().add(1, 3, 3, "📐 图元管理");
         popup.getMenu().add(1, 4, 4, "🌓 切换黑白背景");
         popup.getMenu().add(1, 5, 5, "📜 脚本扩展");
+        popup.getMenu().add(1, 6, 6, CadSound.sfxEnabled ? "🔊 操作提示音：开" : "🔇 操作提示音：关");
+        popup.getMenu().add(1, 7, 7, CadSound.isBgmPlaying() ? "🎵 纯音背景乐：开" : "🎶 纯音背景乐：关");
         
         popup.setOnMenuItemClickListener(item -> {
             if (item.getItemId() == 1) { glView.fitToScreen(); return true; }
             if (item.getItemId() == 2) { showFontTuningDialog(); return true; }
             if (item.getItemId() == 3) { showTypeDialog(); return true; }
             if (item.getItemId() == 5) { showScriptDialog(); return true; }
+            if (item.getItemId() == 6) { CadSound.sfxEnabled = !CadSound.sfxEnabled; getSharedPreferences("cad_cfg", MODE_PRIVATE).edit().putBoolean("cad_sfx_on", CadSound.sfxEnabled).apply(); if (CadSound.sfxEnabled) CadSound.confirm(); Toast.makeText(this, "操作提示音已" + (CadSound.sfxEnabled ? "开启" : "关闭"), Toast.LENGTH_SHORT).show(); return true; }
+            if (item.getItemId() == 7) { CadSound.toggleBgm(); getSharedPreferences("cad_cfg", MODE_PRIVATE).edit().putBoolean("cad_bgm_on", CadSound.isBgmPlaying()).apply(); Toast.makeText(this, "纯音背景乐已" + (CadSound.isBgmPlaying() ? "开启" : "关闭"), Toast.LENGTH_SHORT).show(); return true; }
             if (item.getItemId() == 4) { 
                 glView.toggleTheme(); 
                 // 【核心】切换背景时，同步修改系统状态栏颜色
@@ -495,8 +509,8 @@ public class MainActivity extends Activity {
         }).setPositiveButton("完成", null).show();
     }
 
-    @Override protected void onResume() { super.onResume(); glView.onResume(); }
-    @Override protected void onPause() { super.onPause(); glView.onPause(); }
+    @Override protected void onResume() { super.onResume(); glView.onResume(); if (getSharedPreferences("cad_cfg", MODE_PRIVATE).getBoolean("cad_bgm_on", false)) CadSound.startBgm(); }
+    @Override protected void onPause() { super.onPause(); glView.onPause(); CadSound.stopBgm(); }
     @Override protected void onDestroy() {
         super.onDestroy();
         if (locationManager != null && locationListener != null)
