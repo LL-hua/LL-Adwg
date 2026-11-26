@@ -468,16 +468,24 @@ public class MainActivity extends Activity {
             if (glView.layerCounts.get(i) > 0) valid.add(i);
         if (valid.isEmpty()) return;
         int n = valid.size();
-        String[] labels = new String[n];
-        boolean[] checked = new boolean[n];
+        String[] labels = new String[n + 1];
+        boolean[] checked = new boolean[n + 1];
+        labels[0] = "👆 长按图元隐藏对应图层 (开关)";
+        checked[0] = glView.longPressHideLayer;
         for (int i = 0; i < n; i++) {
             int idx = valid.get(i);
-            labels[i] = glView.layerNames.get(idx) + " (" + glView.layerCounts.get(idx) + "线)";
-            checked[i] = glView.layerVisible[idx];
+            labels[i + 1] = glView.layerNames.get(idx) + " (" + glView.layerCounts.get(idx) + "线)";
+            checked[i + 1] = glView.layerVisible[idx];
         }
         new AlertDialog.Builder(this).setTitle("图层管理开关 (0ms秒切)").setMultiChoiceItems(labels, checked, (d, w, isC) -> {
-            glView.layerVisible[valid.get(w)] = isC;
-            glView.requestRender();
+            if (w == 0) {
+                glView.longPressHideLayer = isC;
+                getSharedPreferences("cad_cfg", MODE_PRIVATE).edit().putBoolean("long_press_hide_layer", isC).apply();
+                Toast.makeText(this, "长按隐藏图层已" + (isC ? "开启" : "关闭"), Toast.LENGTH_SHORT).show();
+            } else {
+                glView.layerVisible[valid.get(w - 1)] = isC;
+                glView.requestRender();
+            }
         }).setNeutralButton("全显", (d, w) -> {
             Arrays.fill(glView.layerVisible, true);
             glView.requestRender();
