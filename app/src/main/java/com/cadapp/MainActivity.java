@@ -349,6 +349,7 @@ public class MainActivity extends Activity {
         popup.getMenu().add(1, 5, 5, "📜 脚本扩展");
         popup.getMenu().add(1, 6, 6, CadSound.sfxEnabled ? "🔊 操作提示音：开" : "🔇 操作提示音：关");
         popup.getMenu().add(1, 7, 7, CadSound.isBgmPlaying() ? "🎵 纯音背景乐：开" : "🎶 纯音背景乐：关");
+        popup.getMenu().add(1, 8, 8, "🌌 重力光点音律盒");
         
         popup.setOnMenuItemClickListener(item -> {
             if (item.getItemId() == 1) { glView.fitToScreen(); return true; }
@@ -356,6 +357,7 @@ public class MainActivity extends Activity {
             if (item.getItemId() == 3) { showTypeDialog(); return true; }
             if (item.getItemId() == 5) { showScriptDialog(); return true; }
             if (item.getItemId() == 6) { CadSound.sfxEnabled = !CadSound.sfxEnabled; getSharedPreferences("cad_cfg", MODE_PRIVATE).edit().putBoolean("cad_sfx_on", CadSound.sfxEnabled).apply(); if (CadSound.sfxEnabled) CadSound.confirm(); Toast.makeText(this, "操作提示音已" + (CadSound.sfxEnabled ? "开启" : "关闭"), Toast.LENGTH_SHORT).show(); return true; }
+            if (item.getItemId() == 8) { MusicBoxDialog.show(this); return true; }
             if (item.getItemId() == 7) { CadSound.toggleBgm(); getSharedPreferences("cad_cfg", MODE_PRIVATE).edit().putBoolean("cad_bgm_on", CadSound.isBgmPlaying()).apply(); Toast.makeText(this, "纯音背景乐已" + (CadSound.isBgmPlaying() ? "开启" : "关闭"), Toast.LENGTH_SHORT).show(); return true; }
             if (item.getItemId() == 4) { 
                 glView.toggleTheme(); 
