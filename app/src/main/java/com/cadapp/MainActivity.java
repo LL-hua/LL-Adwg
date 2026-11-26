@@ -280,7 +280,7 @@ public class MainActivity extends Activity {
 
         SharedPreferences sp = getSharedPreferences("cad_cfg", MODE_PRIVATE);
         CadSound.sfxEnabled = sp.getBoolean("cad_sfx_on", true);
-        if (sp.getBoolean("cad_bgm_on", false)) CadSound.startBgm();
+        CadSound.setBgmMode(sp.getInt("cad_bgm_mode", sp.getBoolean("cad_bgm_on", false) ? 1 : 0));
         String lastAsset = sp.getString("last_asset_dwg", null);
         String lastUri = sp.getString("last_dwg_uri", null);
         Uri extUri = getIntent() != null ? getIntent().getData() : null;
@@ -348,7 +348,8 @@ public class MainActivity extends Activity {
         popup.getMenu().add(1, 4, 4, "🌓 切换黑白背景");
         popup.getMenu().add(1, 5, 5, "📜 脚本扩展");
         popup.getMenu().add(1, 6, 6, CadSound.sfxEnabled ? "🔊 操作提示音：开" : "🔇 操作提示音：关");
-        popup.getMenu().add(1, 7, 7, CadSound.isBgmPlaying() ? "🎵 纯音背景乐：开" : "🎶 纯音背景乐：关");
+        String[] bgmLabels = {"🎶 背景乐：关", "🎵 背景乐：五声音阶", "🍄 背景乐：超级玛丽"};
+        popup.getMenu().add(1, 7, 7, bgmLabels[CadSound.bgmMode % 3]);
         popup.getMenu().add(1, 8, 8, "🌌 重力光点音律盒");
         
         popup.setOnMenuItemClickListener(item -> {
@@ -358,7 +359,7 @@ public class MainActivity extends Activity {
             if (item.getItemId() == 5) { showScriptDialog(); return true; }
             if (item.getItemId() == 6) { CadSound.sfxEnabled = !CadSound.sfxEnabled; getSharedPreferences("cad_cfg", MODE_PRIVATE).edit().putBoolean("cad_sfx_on", CadSound.sfxEnabled).apply(); if (CadSound.sfxEnabled) CadSound.confirm(); Toast.makeText(this, "操作提示音已" + (CadSound.sfxEnabled ? "开启" : "关闭"), Toast.LENGTH_SHORT).show(); return true; }
             if (item.getItemId() == 8) { MusicBoxDialog.show(this); return true; }
-            if (item.getItemId() == 7) { CadSound.toggleBgm(); getSharedPreferences("cad_cfg", MODE_PRIVATE).edit().putBoolean("cad_bgm_on", CadSound.isBgmPlaying()).apply(); Toast.makeText(this, "纯音背景乐已" + (CadSound.isBgmPlaying() ? "开启" : "关闭"), Toast.LENGTH_SHORT).show(); return true; }
+            if (item.getItemId() == 7) { int nm = (CadSound.bgmMode + 1) % 3; CadSound.setBgmMode(nm); getSharedPreferences("cad_cfg", MODE_PRIVATE).edit().putInt("cad_bgm_mode", nm).apply(); String[] names = {"关闭", "五声音阶纯音", "🍄 超级玛丽 8-bit"}; Toast.makeText(this, "背景乐: " + names[nm], Toast.LENGTH_SHORT).show(); return true; }
             if (item.getItemId() == 4) { 
                 glView.toggleTheme(); 
                 // 【核心】切换背景时，同步修改系统状态栏颜色
@@ -511,7 +512,7 @@ public class MainActivity extends Activity {
         }).setPositiveButton("完成", null).show();
     }
 
-    @Override protected void onResume() { super.onResume(); glView.onResume(); if (getSharedPreferences("cad_cfg", MODE_PRIVATE).getBoolean("cad_bgm_on", false)) CadSound.startBgm(); }
+    @Override protected void onResume() { super.onResume(); glView.onResume(); CadSound.setBgmMode(getSharedPreferences("cad_cfg", MODE_PRIVATE).getInt("cad_bgm_mode", 0)); }
     @Override protected void onPause() { super.onPause(); glView.onPause(); CadSound.stopBgm(); }
     @Override protected void onDestroy() {
         super.onDestroy();
